@@ -2,7 +2,13 @@ const path = require('path');
 const express = require('express');
 const session = require('express-session');
 const { GoogleGenAI } = require('@google/genai');
-const { Client, GatewayIntentBits, PermissionsBitField, ChannelType } = require('discord.js');
+const {
+  Client,
+  GatewayIntentBits,
+  PermissionsBitField,
+  ChannelType,
+  ActivityType
+} = require('discord.js');
 const templates = require('./templates');
 
 const app = express();
@@ -26,8 +32,7 @@ if (!DISCORD_TOKEN || !CLIENT_ID || !CLIENT_SECRET || !REDIRECT_URI) {
 const ai = GEMINI_API_KEY ? new GoogleGenAI({ apiKey: GEMINI_API_KEY }) : null;
 const EXPECTED_ADMIN_PASS = ADMIN_PASSWORD || '6767';
 
-// Live admin settings in memory (0 = unlimited for category/channel limits)
-const adminSettings = {
+const DEFAULT_SETTINGS = {
   maintenanceMode: false,
   maintenanceMessage: 'The AI Discord Server Builder is currently under maintenance. Please check back shortly!',
   useGemini: true,
@@ -35,8 +40,23 @@ const adminSettings = {
   defaultPermissions: '8',
   maxCategoriesPerBuild: 0,
   maxChannelsPerCategory: 0,
+  botStatusText: 'AI Server Builder',
+  botPresenceStatus: 'online',
   buildsCompleted: 0
 };
+
+const adminSettings = { ...DEFAULT_SETTINGS };
+const adminActionLogs = [];
+
+function logAdminAction(action) {
+  adminActionLogs.unshift({
+    time: new Date().toISOString(),
+    action
+  });
+  if (adminActionLogs.length > 25) {
+    adminActionLogs.length = 25;
+  }
+}
 
 const client = new Client({
   intents: [
@@ -45,8 +65,28 @@ const client = new Client({
   ]
 });
 
+function applyBotPresence() {
+  if (!client.user) return;
+  const validStatuses = ['online', 'idle', 'dnd'];
+  const status = validStatuses.includes(adminSettings.botPresenceStatus)
+    ? adminSettings.botPresenceStatus
+    : 'online';
+  const activityName = String(adminSettings.botStatusText || 'AI Server Builder').slice(0, 120);
+
+  client.user.setPresence({
+    status,
+    activities: [
+      {
+        name: activityName,
+        type: ActivityType.Playing
+      }
+    ]
+  });
+}
+
 client.once('ready', () => {
   console.log(`Discord bot logged in as ${client.user.tag}`);
+  applyBotPresence();
 });
 
 client.on('error', (err) => {
@@ -123,7 +163,7 @@ function buildStructureFromPromptFallback(promptText) {
   for (const m of quotedMatches) {
     const slug = sanitizeChannelName(m[1]);
     if (slug && !extraChannels.some((c) => c.name === slug)) {
-      extraChannels.push({ name: slug, type: item.type || ChannelType.GuildText });
+      extraChannels.push({ name: slug, type: ChannelType.GuildText });
     }
   }
 
@@ -268,6 +308,19 @@ function getInviteUrl() {
   return `https://discord.com/oauth2/authorize?client_id=${CLIENT_ID}&permissions=${perms}&integration_type=0&scope=bot`;
 }
 
+function getAdminPayload() {
+  return {
+    settings: adminSettings,
+    logs: adminActionLogs,
+    botReady: client.isReady(),
+    botTag: client.user ? client.user.tag : null,
+    connectedGuilds: client.guilds.cache.map((g) => ({ id: g.id, name: g.name, memberCount: g.memberCount })),
+    connectedGuildCount: client.guilds.cache.size,
+    geminiConfigured: Boolean(ai),
+    botInviteUrl: getInviteUrl()
+  };
+}
+
 app.get('/api/status', (req, res) => {
   res.json({
     maintenanceMode: adminSettings.maintenanceMode,
@@ -285,6 +338,7 @@ app.post('/api/admin/login', (req, res) => {
     return res.status(401).json({ error: 'Invalid admin password.' });
   }
   req.session.isAdmin = true;
+  logAdminAction('Admin panel unlocked');
   req.session.save((err) => {
     if (err) {
       return res.status(500).json({ error: 'Failed to save admin session.' });
@@ -292,8 +346,7 @@ app.post('/api/admin/login', (req, res) => {
     res.json({
       ok: true,
       isAdmin: true,
-      settings: adminSettings,
-      botInviteUrl: getInviteUrl()
+      ...getAdminPayload()
     });
   });
 });
@@ -302,18 +355,12 @@ app.post('/api/admin/logout', (req, res) => {
   if (req.session) {
     req.session.isAdmin = false;
   }
+  logAdminAction('Admin panel locked');
   res.json({ ok: true, isAdmin: false });
 });
 
 app.get('/api/admin/settings', requireAdmin, (req, res) => {
-  res.json({
-    settings: adminSettings,
-    botReady: client.isReady(),
-    botTag: client.user ? client.user.tag : null,
-    connectedGuildCount: client.guilds.cache.size,
-    geminiConfigured: Boolean(ai),
-    botInviteUrl: getInviteUrl()
-  });
+  res.json(getAdminPayload());
 });
 
 app.post('/api/admin/settings', requireAdmin, (req, res) => {
@@ -324,11 +371,14 @@ app.post('/api/admin/settings', requireAdmin, (req, res) => {
     allowFallback,
     defaultPermissions,
     maxCategoriesPerBuild,
-    maxChannelsPerCategory
+    maxChannelsPerCategory,
+    botStatusText,
+    botPresenceStatus
   } = req.body || {};
 
   if (typeof maintenanceMode === 'boolean') {
     adminSettings.maintenanceMode = maintenanceMode;
+    logAdminAction(`Maintenance mode set to ${maintenanceMode ? 'ON' : 'OFF'}`);
   }
   if (typeof maintenanceMessage === 'string' && maintenanceMessage.trim().length > 0) {
     adminSettings.maintenanceMessage = maintenanceMessage.trim().slice(0, 240);
@@ -348,12 +398,81 @@ app.post('/api/admin/settings', requireAdmin, (req, res) => {
   if (Number.isFinite(Number(maxChannelsPerCategory))) {
     adminSettings.maxChannelsPerCategory = Math.max(0, Math.floor(Number(maxChannelsPerCategory)));
   }
+  if (typeof botStatusText === 'string' && botStatusText.trim().length > 0) {
+    adminSettings.botStatusText = botStatusText.trim().slice(0, 120);
+  }
+  if (typeof botPresenceStatus === 'string' && ['online', 'idle', 'dnd'].includes(botPresenceStatus)) {
+    adminSettings.botPresenceStatus = botPresenceStatus;
+  }
+
+  applyBotPresence();
+  logAdminAction('Saved admin settings');
 
   res.json({
     ok: true,
-    settings: adminSettings,
-    botInviteUrl: getInviteUrl()
+    ...getAdminPayload()
   });
+});
+
+// Extra Admin Commands
+app.post('/api/admin/command', requireAdmin, async (req, res) => {
+  const { command, targetId, message } = req.body || {};
+
+  try {
+    if (command === 'reset-builds') {
+      adminSettings.buildsCompleted = 0;
+      logAdminAction('Reset completed builds counter to 0');
+      return res.json({ ok: true, message: 'Builds counter reset to 0.', ...getAdminPayload() });
+    }
+
+    if (command === 'reset-defaults') {
+      const currentBuilds = adminSettings.buildsCompleted;
+      Object.assign(adminSettings, DEFAULT_SETTINGS, { buildsCompleted: currentBuilds });
+      applyBotPresence();
+      logAdminAction('Reset all admin settings to defaults');
+      return res.json({ ok: true, message: 'All admin settings reset to defaults.', ...getAdminPayload() });
+    }
+
+    if (command === 'clear-logs') {
+      adminActionLogs.length = 0;
+      return res.json({ ok: true, message: 'Admin activity log cleared.', ...getAdminPayload() });
+    }
+
+    if (command === 'leave-guild') {
+      const guildId = String(targetId || '').trim();
+      if (!guildId) {
+        return res.status(400).json({ error: 'Provide a Server/Guild ID to leave.' });
+      }
+      const guild = client.guilds.cache.get(guildId);
+      if (!guild) {
+        return res.status(404).json({ error: 'Bot is not in a server with that ID.' });
+      }
+      const guildName = guild.name;
+      await guild.leave();
+      logAdminAction(`Left server "${guildName}" (${guildId})`);
+      return res.json({ ok: true, message: `Bot left server "${guildName}" (${guildId}).`, ...getAdminPayload() });
+    }
+
+    if (command === 'send-message') {
+      const channelId = String(targetId || '').trim();
+      const text = String(message || '').trim();
+      if (!channelId || !text) {
+        return res.status(400).json({ error: 'Provide both a Channel ID and a message.' });
+      }
+      const channel = await client.channels.fetch(channelId).catch(() => null);
+      if (!channel || !channel.isTextBased()) {
+        return res.status(404).json({ error: 'Text channel not found or inaccessible.' });
+      }
+      await channel.send(text);
+      logAdminAction(`Sent message to channel ${channelId}`);
+      return res.json({ ok: true, message: `Message sent to channel ${channelId}.`, ...getAdminPayload() });
+    }
+
+    return res.status(400).json({ error: 'Unknown admin command.' });
+  } catch (err) {
+    console.error('Admin command error:', err);
+    return res.status(500).json({ error: err.message || 'Admin command failed.' });
+  }
 });
 
 app.get('/auth/discord', (req, res) => {
