@@ -26,15 +26,15 @@ if (!DISCORD_TOKEN || !CLIENT_ID || !CLIENT_SECRET || !REDIRECT_URI) {
 const ai = GEMINI_API_KEY ? new GoogleGenAI({ apiKey: GEMINI_API_KEY }) : null;
 const EXPECTED_ADMIN_PASS = ADMIN_PASSWORD || '6767';
 
-// Live admin settings in memory (reset on restart unless persisted)
+// Live admin settings in memory (0 = unlimited for category/channel limits)
 const adminSettings = {
   maintenanceMode: false,
   maintenanceMessage: 'The AI Discord Server Builder is currently under maintenance. Please check back shortly!',
   useGemini: true,
   allowFallback: true,
   defaultPermissions: '8',
-  maxCategoriesPerBuild: 5,
-  maxChannelsPerCategory: 6,
+  maxCategoriesPerBuild: 0,
+  maxChannelsPerCategory: 0,
   buildsCompleted: 0
 };
 
@@ -78,6 +78,10 @@ function sanitizeChannelName(name) {
     .slice(0, 90);
 }
 
+function limitList(arr, max) {
+  return Number.isFinite(max) && max > 0 ? arr.slice(0, max) : arr;
+}
+
 function buildStructureFromPromptFallback(promptText) {
   const cleanPrompt = String(promptText || '').trim();
   const lower = cleanPrompt.toLowerCase();
@@ -119,7 +123,7 @@ function buildStructureFromPromptFallback(promptText) {
   for (const m of quotedMatches) {
     const slug = sanitizeChannelName(m[1]);
     if (slug && !extraChannels.some((c) => c.name === slug)) {
-      extraChannels.push({ name: slug, type: ChannelType.GuildText });
+      extraChannels.push({ name: slug, type: item.type || ChannelType.GuildText });
     }
   }
 
@@ -146,25 +150,25 @@ function buildStructureFromPromptFallback(promptText) {
     );
   }
 
-  const maxCats = Math.max(1, Math.min(5, Number(adminSettings.maxCategoriesPerBuild) || 3));
-  const maxCh = Math.max(1, Math.min(8, Number(adminSettings.maxChannelsPerCategory) || 6));
+  const maxCats = Number(adminSettings.maxCategoriesPerBuild) || 0;
+  const maxCh = Number(adminSettings.maxChannelsPerCategory) || 0;
 
   const allCategories = [
-    { name: 'Information', channels: infoChannels.slice(0, maxCh) },
-    { name: 'Community', channels: [...mainChannels, ...extraChannels].slice(0, maxCh) },
-    { name: 'Voice Channels', channels: voiceChannels.slice(0, maxCh) }
+    { name: 'Information', channels: limitList(infoChannels, maxCh) },
+    { name: 'Community', channels: limitList([...mainChannels, ...extraChannels], maxCh) },
+    { name: 'Voice Channels', channels: limitList(voiceChannels, maxCh) }
   ];
 
   return {
     name: `Custom Prompt: "${cleanPrompt.slice(0, 50)}${cleanPrompt.length > 50 ? '...' : ''}"`,
     roles,
-    categories: allCategories.slice(0, maxCats)
+    categories: limitList(allCategories, maxCats)
   };
 }
 
 async function buildStructureWithGemini(promptText) {
-  const maxCats = Math.max(1, Math.min(5, Number(adminSettings.maxCategoriesPerBuild) || 5));
-  const maxCh = Math.max(1, Math.min(8, Number(adminSettings.maxChannelsPerCategory) || 6));
+  const maxCats = Number(adminSettings.maxCategoriesPerBuild) || 0;
+  const maxCh = Number(adminSettings.maxChannelsPerCategory) || 0;
 
   if (!adminSettings.useGemini || !ai) {
     if (!adminSettings.allowFallback) {
@@ -176,7 +180,8 @@ async function buildStructureWithGemini(promptText) {
   try {
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
-      contents: `Create a clean Discord server structure in English for this user request: "${promptText}".
+      contents: `Create a Discord server structure for this user request: "${promptText}".
+Build as many roles, categories, and channels as fit the request naturally without artificial caps.
 Return ONLY valid JSON matching this schema:
 {
   "roles": [
@@ -192,8 +197,6 @@ Return ONLY valid JSON matching this schema:
   ]
 }
 Rules:
-- Keep role count between 2 and 6.
-- Keep category count between 2 and ${maxCats}, with 2 to ${maxCh} channels per category.
 - Channel type must be "text" or "voice".
 - Text channel names should be lowercase words separated by hyphens (e.g. "general-chat").
 - Voice channel names can be clean words (e.g. "General Voice").`,
@@ -204,7 +207,7 @@ Rules:
 
     const parsed = JSON.parse(response.text);
     const roles = Array.isArray(parsed.roles) && parsed.roles.length > 0
-      ? parsed.roles.slice(0, 6).map((r) => ({
+      ? parsed.roles.map((r) => ({
           name: String(r.name || 'Member').slice(0, 40),
           color: /^#[0-9a-fA-F]{6}$/.test(r.color || '') ? r.color : '#3498db',
           permissions: r.admin
@@ -216,19 +219,17 @@ Rules:
       : buildStructureFromPromptFallback(promptText).roles;
 
     const categories = Array.isArray(parsed.categories) && parsed.categories.length > 0
-      ? parsed.categories.slice(0, maxCats).map((cat) => ({
+      ? limitList(parsed.categories, maxCats).map((cat) => ({
           name: String(cat.name || 'Channels').slice(0, 60),
-          channels: (Array.isArray(cat.channels) ? cat.channels : [])
-            .slice(0, maxCh)
-            .map((ch) => {
-              const isVoice = String(ch.type || '').toLowerCase() === 'voice';
-              return {
-                name: isVoice
-                  ? String(ch.name || 'Voice Room').slice(0, 60)
-                  : sanitizeChannelName(ch.name || 'channel') || 'channel',
-                type: isVoice ? ChannelType.GuildVoice : ChannelType.GuildText
-              };
-            })
+          channels: limitList(Array.isArray(cat.channels) ? cat.channels : [], maxCh).map((ch) => {
+            const isVoice = String(ch.type || '').toLowerCase() === 'voice';
+            return {
+              name: isVoice
+                ? String(ch.name || 'Voice Room').slice(0, 60)
+                : sanitizeChannelName(ch.name || 'channel') || 'channel',
+              type: isVoice ? ChannelType.GuildVoice : ChannelType.GuildText
+            };
+          })
         }))
       : buildStructureFromPromptFallback(promptText).categories;
 
@@ -267,7 +268,6 @@ function getInviteUrl() {
   return `https://discord.com/oauth2/authorize?client_id=${CLIENT_ID}&permissions=${perms}&integration_type=0&scope=bot`;
 }
 
-// Public status endpoint (also used for maintenance banner/gate)
 app.get('/api/status', (req, res) => {
   res.json({
     maintenanceMode: adminSettings.maintenanceMode,
@@ -279,7 +279,6 @@ app.get('/api/status', (req, res) => {
   });
 });
 
-// Admin auth endpoints
 app.post('/api/admin/login', (req, res) => {
   const { password } = req.body || {};
   if (String(password || '') !== EXPECTED_ADMIN_PASS) {
@@ -344,10 +343,10 @@ app.post('/api/admin/settings', requireAdmin, (req, res) => {
     adminSettings.defaultPermissions = defaultPermissions.trim();
   }
   if (Number.isFinite(Number(maxCategoriesPerBuild))) {
-    adminSettings.maxCategoriesPerBuild = Math.max(1, Math.min(5, Number(maxCategoriesPerBuild)));
+    adminSettings.maxCategoriesPerBuild = Math.max(0, Math.floor(Number(maxCategoriesPerBuild)));
   }
   if (Number.isFinite(Number(maxChannelsPerCategory))) {
-    adminSettings.maxChannelsPerCategory = Math.max(1, Math.min(8, Number(maxChannelsPerCategory)));
+    adminSettings.maxChannelsPerCategory = Math.max(0, Math.floor(Number(maxChannelsPerCategory)));
   }
 
   res.json({
