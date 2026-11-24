@@ -13,7 +13,7 @@
       padding: 2rem;
     }
     .container {
-      max-width: 780px;
+      max-width: 820px;
       margin: 0 auto;
       background: #1e293b;
       border: 1px solid #334155;
@@ -21,6 +21,7 @@
       padding: 2rem;
     }
     h1 { margin-top: 0; font-size: 1.6rem; }
+    h2 { margin: 0 0 0.75rem 0; font-size: 1.2rem; }
     p.sub { color: #94a3b8; }
     button, a.btn {
       display: inline-block;
@@ -36,8 +37,12 @@
     button:hover, a.btn:hover { background: #4752c4; }
     button.secondary, a.btn.secondary { background: #334155; }
     button.secondary:hover, a.btn.secondary:hover { background: #475569; }
-    a.btn.invite { background: #16a34a; }
-    a.btn.invite:hover { background: #15803d; }
+    a.btn.invite, button.success { background: #16a34a; }
+    a.btn.invite:hover, button.success:hover { background: #15803d; }
+    button.danger { background: #dc2626; }
+    button.danger:hover { background: #b91c1c; }
+    button.warning { background: #d97706; }
+    button.warning:hover { background: #b45309; }
     .actions {
       display: flex;
       flex-wrap: wrap;
@@ -46,7 +51,7 @@
     }
     .row { margin: 1.2rem 0; }
     label { display: block; margin-bottom: 0.4rem; color: #cbd5e1; font-weight: 600; }
-    select, textarea {
+    select, textarea, input[type="password"], input[type="text"], input[type="number"] {
       width: 100%;
       box-sizing: border-box;
       padding: 0.65rem;
@@ -67,22 +72,75 @@
       border: 1px solid #334155;
       white-space: pre-wrap;
     }
+    .maintenance-banner {
+      background: #78350f;
+      border: 1px solid #f59e0b;
+      color: #fef3c7;
+      padding: 0.9rem 1rem;
+      border-radius: 8px;
+      margin-bottom: 1.25rem;
+      display: none;
+    }
     .topbar {
       display: flex;
       justify-content: space-between;
       align-items: center;
       gap: 1rem;
       margin-bottom: 1.5rem;
+      flex-wrap: wrap;
+    }
+    .admin-box {
+      margin-top: 2rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid #334155;
+    }
+    .admin-card {
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 10px;
+      padding: 1.25rem;
+      margin-top: 1rem;
+    }
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 1rem;
+    }
+    .check-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin: 0.6rem 0;
+    }
+    .check-row input[type="checkbox"] {
+      width: auto;
+      transform: scale(1.15);
+    }
+    .stats-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+      font-size: 0.9rem;
+      color: #cbd5e1;
+    }
+    .pill {
+      background: #1e293b;
+      border: 1px solid #475569;
+      padding: 0.35rem 0.7rem;
+      border-radius: 999px;
     }
   </style>
 </head>
 <body>
   <div class="container">
+    <div id="maintenanceBanner" class="maintenance-banner"></div>
+
     <div id="loggedOutView">
       <h1>AI Discord Server Builder</h1>
       <p class="sub">Sign in with Discord, invite the bot, and describe the server structure you want in your own words.</p>
       <div class="actions">
-        <a class="btn" href="/auth/discord">Login with Discord</a>
+        <a class="btn" id="discordLoginBtn" href="/auth/discord">Login with Discord</a>
         <a
           class="btn invite"
           href="https://discord.com/oauth2/authorize?client_id=1574834770930827476&permissions=8&integration_type=0&scope=bot"
@@ -103,45 +161,112 @@
         <button class="secondary" id="logoutBtn">Logout</button>
       </div>
 
-      <div class="row">
-        <label for="guildSelect">Select Server</label>
-        <select id="guildSelect"></select>
-        <div class="actions">
-          <a
-            class="btn invite"
-            id="inviteBotLink"
-            href="https://discord.com/oauth2/authorize?client_id=1574834770930827476&permissions=8&integration_type=0&scope=bot"
-            target="_blank"
-            rel="noopener"
-          >
-            Invite Bot to Server
-          </a>
-          <button class="secondary" type="button" id="refreshBtn">Refresh Servers</button>
+      <div id="builderSection">
+        <div class="row">
+          <label for="guildSelect">Select Server</label>
+          <select id="guildSelect"></select>
+          <div class="actions">
+            <a
+              class="btn invite"
+              id="inviteBotLink"
+              href="https://discord.com/oauth2/authorize?client_id=1574834770930827476&permissions=8&integration_type=0&scope=bot"
+              target="_blank"
+              rel="noopener"
+            >
+              Invite Bot to Server
+            </a>
+            <button class="secondary" type="button" id="refreshBtn">Refresh Servers</button>
+          </div>
+        </div>
+
+        <div class="row">
+          <label for="promptInput">Describe Your Server (Powered by Gemini)</label>
+          <textarea id="promptInput" placeholder="Example: Create a gaming and chill server with memes, clips, rules, announcements, and squad voice channels..."></textarea>
+          <div class="hint">Type anything you want here to generate a custom server structure. Leave empty to use a preset template below.</div>
+        </div>
+
+        <div class="row">
+          <label for="templateSelect">Or Choose a Preset Template</label>
+          <select id="templateSelect"></select>
+        </div>
+
+        <div class="row">
+          <button id="applyBtn">Build Server Structure</button>
         </div>
       </div>
 
-      <div class="row">
-        <label for="promptInput">Describe Your Server (Powered by Gemini)</label>
-        <textarea id="promptInput" placeholder="Example: Create a gaming and chill server with memes, clips, rules, announcements, and squad voice channels..."></textarea>
-        <div class="hint">Type anything you want here to generate a custom server structure. Leave empty to use a preset template below.</div>
-      </div>
-
-      <div class="row">
-        <label for="templateSelect">Or Choose a Preset Template</label>
-        <select id="templateSelect"></select>
-      </div>
-
-      <div class="row">
-        <button id="applyBtn">Build Server Structure</button>
-      </div>
-
       <div id="statusBox" class="status" style="display: none;"></div>
+    </div>
+
+    <!-- Admin Panel Section -->
+    <div class="admin-box">
+      <div class="topbar" style="margin-bottom: 0.5rem;">
+        <div>
+          <h2 style="margin-bottom: 0.15rem;">Admin Panel</h2>
+          <div class="sub" style="font-size: 0.88rem;">Manage maintenance mode, AI settings, and build limits.</div>
+        </div>
+        <button class="secondary" type="button" id="toggleAdminPanelBtn">Open Admin Panel</button>
+      </div>
+
+      <div id="adminLoginCard" class="admin-card" style="display: none;">
+        <label for="adminPasswordInput">Admin Password</label>
+        <input type="password" id="adminPasswordInput" placeholder="Enter admin password..." />
+        <div class="actions">
+          <button type="button" id="adminLoginBtn">Unlock Admin Panel</button>
+        </div>
+        <div id="adminLoginStatus" class="hint"></div>
+      </div>
+
+      <div id="adminDashboardCard" class="admin-card" style="display: none;">
+        <div class="stats-bar" id="adminStatsBar"></div>
+
+        <div class="actions" style="margin-bottom: 1rem;">
+          <button type="button" id="maintenanceToggleBtn" class="warning">Toggle Maintenance Mode</button>
+          <button type="button" id="saveAdminSettingsBtn" class="success">Save Admin Settings</button>
+          <button type="button" id="adminLogoutBtn" class="secondary">Lock Admin Panel</button>
+        </div>
+
+        <div class="row" style="margin: 0.8rem 0;">
+          <label for="adminMaintenanceMsg">Maintenance Message</label>
+          <input type="text" id="adminMaintenanceMsg" />
+        </div>
+
+        <div class="check-row">
+          <input type="checkbox" id="adminUseGemini" />
+          <label for="adminUseGemini" style="margin: 0;">Enable Gemini AI Prompt Generator</label>
+        </div>
+
+        <div class="check-row">
+          <input type="checkbox" id="adminAllowFallback" />
+          <label for="adminAllowFallback" style="margin: 0;">Allow Local Keyword Fallback if Gemini Fails/Off</label>
+        </div>
+
+        <div class="grid-2" style="margin-top: 0.9rem;">
+          <div>
+            <label for="adminDefaultPermissions">Bot Invite Permissions Bitfield</label>
+            <input type="text" id="adminDefaultPermissions" />
+          </div>
+          <div>
+            <label for="adminMaxCategories">Max Categories per Build (1–5)</label>
+            <input type="number" id="adminMaxCategories" min="1" max="5" />
+          </div>
+          <div>
+            <label for="adminMaxChannels">Max Channels per Category (1–8)</label>
+            <input type="number" id="adminMaxChannels" min="1" max="8" />
+          </div>
+        </div>
+
+        <div id="adminStatusBox" class="status" style="display: none;"></div>
+      </div>
     </div>
   </div>
 
   <script>
     const loggedOutView = document.getElementById('loggedOutView');
     const loggedInView = document.getElementById('loggedInView');
+    const builderSection = document.getElementById('builderSection');
+    const maintenanceBanner = document.getElementById('maintenanceBanner');
+    const discordLoginBtn = document.getElementById('discordLoginBtn');
     const userInfo = document.getElementById('userInfo');
     const guildSelect = document.getElementById('guildSelect');
     const promptInput = document.getElementById('promptInput');
@@ -149,18 +274,110 @@
     const inviteBotLink = document.getElementById('inviteBotLink');
     const statusBox = document.getElementById('statusBox');
 
+    const toggleAdminPanelBtn = document.getElementById('toggleAdminPanelBtn');
+    const adminLoginCard = document.getElementById('adminLoginCard');
+    const adminDashboardCard = document.getElementById('adminDashboardCard');
+    const adminPasswordInput = document.getElementById('adminPasswordInput');
+    const adminLoginStatus = document.getElementById('adminLoginStatus');
+    const adminStatsBar = document.getElementById('adminStatsBar');
+    const maintenanceToggleBtn = document.getElementById('maintenanceToggleBtn');
+    const adminMaintenanceMsg = document.getElementById('adminMaintenanceMsg');
+    const adminUseGemini = document.getElementById('adminUseGemini');
+    const adminAllowFallback = document.getElementById('adminAllowFallback');
+    const adminDefaultPermissions = document.getElementById('adminDefaultPermissions');
+    const adminMaxCategories = document.getElementById('adminMaxCategories');
+    const adminMaxChannels = document.getElementById('adminMaxChannels');
+    const adminStatusBox = document.getElementById('adminStatusBox');
+
+    let currentSettings = null;
+    let isAdminUnlocked = false;
+    let adminSectionVisible = false;
+
     function showStatus(text) {
       statusBox.style.display = 'block';
       statusBox.textContent = text;
     }
 
+    function showAdminStatus(text) {
+      adminStatusBox.style.display = 'block';
+      adminStatusBox.textContent = text;
+    }
+
+    function updateMaintenanceUI(maintenanceMode, maintenanceMessage) {
+      if (maintenanceMode) {
+        maintenanceBanner.style.display = 'block';
+        maintenanceBanner.textContent = `MAINTENANCE MODE ACTIVE: ${maintenanceMessage}`;
+        if (!isAdminUnlocked) {
+          discordLoginBtn.style.display = 'none';
+          builderSection.style.display = 'none';
+        } else {
+          discordLoginBtn.style.display = 'inline-block';
+          builderSection.style.display = 'block';
+        }
+      } else {
+        maintenanceBanner.style.display = 'none';
+        discordLoginBtn.style.display = 'inline-block';
+        builderSection.style.display = 'block';
+      }
+
+      if (maintenanceToggleBtn) {
+        maintenanceToggleBtn.textContent = maintenanceMode
+          ? 'Disable Maintenance Mode (ON)'
+          : 'Enable Maintenance Mode (OFF)';
+        maintenanceToggleBtn.className = maintenanceMode ? 'success' : 'warning';
+      }
+    }
+
+    function populateAdminForm(data) {
+      currentSettings = data.settings;
+      adminStatsBar.innerHTML = `
+        <span class="pill">Bot: ${data.botReady ? `Online (${data.botTag})` : 'Offline'}</span>
+        <span class="pill">Servers: ${data.connectedGuildCount ?? 0}</span>
+        <span class="pill">Builds: ${currentSettings.buildsCompleted ?? 0}</span>
+        <span class="pill">Gemini Key: ${data.geminiConfigured ? 'Configured' : 'Missing'}</span>
+      `;
+      adminMaintenanceMsg.value = currentSettings.maintenanceMessage || '';
+      adminUseGemini.checked = Boolean(currentSettings.useGemini);
+      adminAllowFallback.checked = Boolean(currentSettings.allowFallback);
+      adminDefaultPermissions.value = currentSettings.defaultPermissions || '8';
+      adminMaxCategories.value = currentSettings.maxCategoriesPerBuild ?? 5;
+      adminMaxChannels.value = currentSettings.maxChannelsPerCategory ?? 6;
+      updateMaintenanceUI(Boolean(currentSettings.maintenanceMode), currentSettings.maintenanceMessage);
+    }
+
+    async function loadAdminSettings() {
+      const res = await fetch('/api/admin/settings');
+      if (!res.ok) {
+        isAdminUnlocked = false;
+        adminDashboardCard.style.display = 'none';
+        if (adminSectionVisible) {
+          adminLoginCard.style.display = 'block';
+        }
+        return;
+      }
+      const data = await res.json();
+      isAdminUnlocked = true;
+      adminLoginCard.style.display = 'none';
+      adminDashboardCard.style.display = 'block';
+      populateAdminForm(data);
+    }
+
     async function init() {
+      const statusRes = await fetch('/api/status');
+      const statusData = await statusRes.json();
+      isAdminUnlocked = Boolean(statusData.isAdmin);
+      updateMaintenanceUI(Boolean(statusData.maintenanceMode), statusData.maintenanceMessage);
+
       const sessionRes = await fetch('/api/session');
       const sessionData = await sessionRes.json();
 
       if (!sessionData.loggedIn) {
         loggedOutView.style.display = 'block';
         loggedInView.style.display = 'none';
+        if (isAdminUnlocked) {
+          adminSectionVisible = true;
+          await loadAdminSettings();
+        }
         return;
       }
 
@@ -169,34 +386,128 @@
       const displayName = sessionData.user.globalName || sessionData.user.username;
       userInfo.textContent = `Signed in as ${displayName}`;
 
-      const [guildsRes, templatesRes] = await Promise.all([
-        fetch('/api/guilds'),
-        fetch('/api/templates')
-      ]);
+      if (!statusData.maintenanceMode || isAdminUnlocked) {
+        const [guildsRes, templatesRes] = await Promise.all([
+          fetch('/api/guilds'),
+          fetch('/api/templates')
+        ]);
 
-      const guildsData = await guildsRes.json();
-      const templatesData = await templatesRes.json();
+        if (guildsRes.ok && templatesRes.ok) {
+          const guildsData = await guildsRes.json();
+          const templatesData = await templatesRes.json();
 
-      if (guildsData.botInviteUrl) {
-        inviteBotLink.href = guildsData.botInviteUrl;
+          if (guildsData.botInviteUrl) {
+            inviteBotLink.href = guildsData.botInviteUrl;
+          }
+
+          guildSelect.innerHTML = '';
+          for (const g of guildsData.guilds || []) {
+            const opt = document.createElement('option');
+            opt.value = g.id;
+            opt.textContent = `${g.name}${g.botInServer ? ' (Bot connected)' : ' (Invite bot first)'}`;
+            guildSelect.appendChild(opt);
+          }
+
+          templateSelect.innerHTML = '';
+          for (const t of templatesData.templates || []) {
+            const opt = document.createElement('option');
+            opt.value = t.id;
+            opt.textContent = `${t.name} — ${t.description}`;
+            templateSelect.appendChild(opt);
+          }
+        }
       }
 
-      guildSelect.innerHTML = '';
-      for (const g of guildsData.guilds || []) {
-        const opt = document.createElement('option');
-        opt.value = g.id;
-        opt.textContent = `${g.name}${g.botInServer ? ' (Bot connected)' : ' (Invite bot first)'}`;
-        guildSelect.appendChild(opt);
-      }
-
-      templateSelect.innerHTML = '';
-      for (const t of templatesData.templates || []) {
-        const opt = document.createElement('option');
-        opt.value = t.id;
-        opt.textContent = `${t.name} — ${t.description}`;
-        templateSelect.appendChild(opt);
+      if (isAdminUnlocked) {
+        adminSectionVisible = true;
+        await loadAdminSettings();
       }
     }
+
+    toggleAdminPanelBtn.addEventListener('click', async () => {
+      adminSectionVisible = !adminSectionVisible;
+      if (!adminSectionVisible) {
+        adminLoginCard.style.display = 'none';
+        adminDashboardCard.style.display = 'none';
+        toggleAdminPanelBtn.textContent = 'Open Admin Panel';
+        return;
+      }
+      toggleAdminPanelBtn.textContent = 'Hide Admin Panel';
+      await loadAdminSettings();
+    });
+
+    document.getElementById('adminLoginBtn').addEventListener('click', async () => {
+      adminLoginStatus.textContent = 'Checking password...';
+      const res = await fetch('/api/admin/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: adminPasswordInput.value })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        adminLoginStatus.textContent = data.error || 'Wrong password.';
+        return;
+      }
+      adminPasswordInput.value = '';
+      adminLoginStatus.textContent = '';
+      isAdminUnlocked = true;
+      await init();
+      await loadAdminSettings();
+      showAdminStatus('Admin Panel unlocked.');
+    });
+
+    maintenanceToggleBtn.addEventListener('click', async () => {
+      const nextMode = !(currentSettings && currentSettings.maintenanceMode);
+      const res = await fetch('/api/admin/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          maintenanceMode: nextMode,
+          maintenanceMessage: adminMaintenanceMsg.value
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        await loadAdminSettings();
+        updateMaintenanceUI(data.settings.maintenanceMode, data.settings.maintenanceMessage);
+        showAdminStatus(
+          data.settings.maintenanceMode
+            ? 'Maintenance Mode is now ON (regular users are blocked).'
+            : 'Maintenance Mode is now OFF (site is open for everyone).'
+        );
+      }
+    });
+
+    document.getElementById('saveAdminSettingsBtn').addEventListener('click', async () => {
+      const res = await fetch('/api/admin/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          maintenanceMessage: adminMaintenanceMsg.value,
+          useGemini: adminUseGemini.checked,
+          allowFallback: adminAllowFallback.checked,
+          defaultPermissions: adminDefaultPermissions.value,
+          maxCategoriesPerBuild: Number(adminMaxCategories.value),
+          maxChannelsPerCategory: Number(adminMaxChannels.value)
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showAdminStatus(`Error: ${data.error || 'Could not save settings.'}`);
+        return;
+      }
+      await loadAdminSettings();
+      await init();
+      showAdminStatus('Admin settings saved.');
+    });
+
+    document.getElementById('adminLogoutBtn').addEventListener('click', async () => {
+      await fetch('/api/admin/logout', { method: 'POST' });
+      isAdminUnlocked = false;
+      adminDashboardCard.style.display = 'none';
+      adminLoginCard.style.display = 'block';
+      await init();
+    });
 
     document.getElementById('refreshBtn').addEventListener('click', async () => {
       showStatus('Refreshing server list...');
