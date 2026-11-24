@@ -1,7 +1,7 @@
 const path = require('path');
 const express = require('express');
 const session = require('express-session');
-const { Client, GatewayIntentBits, PermissionsBitField } = require('discord.js');
+const { Client, GatewayIntentBits, PermissionsBitField, ChannelType } = require('discord.js');
 const templates = require('./templates');
 
 const app = express();
@@ -49,6 +49,98 @@ app.use(
     }
   })
 );
+
+function sanitizeChannelName(name) {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, '')
+    .trim()
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .slice(0, 90);
+}
+
+function buildStructureFromPrompt(promptText) {
+  const cleanPrompt = String(promptText || '').trim();
+  const lower = cleanPrompt.toLowerCase();
+
+  const roles = [
+    { name: 'Admin', color: '#e74c3c', permissions: [PermissionsBitField.Flags.Administrator] },
+    { name: 'Moderator', color: '#3498db', permissions: [PermissionsBitField.Flags.ManageMessages, PermissionsBitField.Flags.KickMembers] },
+    { name: 'Member', color: '#2ecc71', permissions: [] }
+  ];
+
+  const infoChannels = [{ name: 'welcome', type: ChannelType.GuildText }];
+  if (/rule|regel|info|announce|aankondig/.test(lower)) {
+    infoChannels.push({ name: 'rules', type: ChannelType.GuildText });
+    infoChannels.push({ name: 'announcements', type: ChannelType.GuildText });
+  }
+
+  const mainChannels = [{ name: 'general', type: ChannelType.GuildText }];
+  const extraChannels = [];
+  const voiceChannels = [{ name: 'General Voice', type: ChannelType.GuildVoice }];
+
+  const keywordMap = [
+    { regex: /\b(meme|memes|funny|joke)\b/i, channel: 'memes', type: ChannelType.GuildText },
+    { regex: /\b(clip|clips|highlight|highlights|media|photo|photos|image|images)\b/i, channel: 'media-and-clips', type: ChannelType.GuildText },
+    { regex: /\b(game|gaming|gamer|squad|team|match|lfg|ranked)\b/i, channel: 'gaming-chat', type: ChannelType.GuildText },
+    { regex: /\b(study|studie|homework|school|exam|notes|project|work)\b/i, channel: 'study-and-projects', type: ChannelType.GuildText },
+    { regex: /\b(code|coding|dev|developer|programming|bot|tech)\b/i, channel: 'dev-and-tech', type: ChannelType.GuildText },
+    { regex: /\b(art|design|draw|drawing|creative|music|muziek)\b/i, channel: 'creative-corner', type: ChannelType.GuildText },
+    { regex: /\b(bot|command|commands)\b/i, channel: 'bot-commands', type: ChannelType.GuildText },
+    { regex: /\b(suggest|suggestion|suggestions|idea|ideas|feedback)\b/i, channel: 'suggestions', type: ChannelType.GuildText }
+  ];
+
+  for (const item of keywordMap) {
+    if (item.regex.test(lower)) {
+      extraChannels.push({ name: item.channel, type: item.type });
+    }
+  }
+
+  // Extract quoted words or "channels for X / with X" hints
+  const quotedMatches = [...cleanPrompt.matchAll(/"([^"]{2,30})"/g)];
+  for (const m of quotedMatches) {
+    const slug = sanitizeChannelName(m[1]);
+    if (slug && !extraChannels.some((c) => c.name === slug)) {
+      extraChannels.push({ name: slug, type: ChannelType.GuildText });
+    }
+  }
+
+  if (/\b(music|muziek|dj|radio)\b/i.test(lower)) {
+    voiceChannels.push({ name: 'Music Lounge', type: ChannelType.GuildVoice });
+  }
+  if (/\b(game|gaming|squad|team|vc|voice|call|calls)\b/i.test(lower)) {
+    voiceChannels.push({ name: 'Squad VC 1', type: ChannelType.GuildVoice });
+    voiceChannels.push({ name: 'Squad VC 2', type: ChannelType.GuildVoice });
+  }
+  if (/\b(study|studie|focus|meeting|meetings)\b/i.test(lower)) {
+    voiceChannels.push({ name: 'Focus Room', type: ChannelType.GuildVoice });
+  }
+
+  if (/\b(vip|friend|friends|vrienden|artist|creator|creators|mod|mods|staff)\b/i.test(lower)) {
+    roles.splice(2, 0, { name: 'VIP / Friends', color: '#f1c40f', permissions: [] });
+  }
+
+  if (extraChannels.length === 0) {
+    extraChannels.push(
+      { name: 'chat', type: ChannelType.GuildText },
+      { name: 'media', type: ChannelType.GuildText },
+      { name: 'bot-commands', type: ChannelType.GuildText }
+    );
+  }
+
+  const categories = [
+    { name: 'Information', channels: infoChannels },
+    { name: 'Community', channels: [...mainChannels, ...extraChannels.slice(0, 6)] },
+    { name: 'Voice Channels', channels: voiceChannels.slice(0, 4) }
+  ];
+
+  return {
+    name: `Custom Prompt: "${cleanPrompt.slice(0, 50)}${cleanPrompt.length > 50 ? '...' : ''}"`,
+    roles,
+    categories
+  };
+}
 
 function requireAuth(req, res, next) {
   if (!req.session || !req.session.user || !req.session.accessToken) {
@@ -178,11 +270,18 @@ app.get('/api/guilds', requireAuth, async (req, res) => {
 });
 
 app.post('/api/apply-template', requireAuth, async (req, res) => {
-  const { guildId, templateId } = req.body;
-  const template = templates[templateId];
+  const { guildId, templateId, prompt } = req.body;
+  const trimmedPrompt = typeof prompt === 'string' ? prompt.trim() : '';
 
-  if (!guildId || !template) {
-    return res.status(400).json({ error: 'Please select a valid server and template.' });
+  let structure = null;
+  if (trimmedPrompt.length > 0) {
+    structure = buildStructureFromPrompt(trimmedPrompt);
+  } else if (templateId && templates[templateId]) {
+    structure = templates[templateId];
+  }
+
+  if (!guildId || !structure) {
+    return res.status(400).json({ error: 'Please select a server and either type a prompt or choose a template.' });
   }
 
   const guild = client.guilds.cache.get(guildId);
@@ -192,7 +291,7 @@ app.post('/api/apply-template', requireAuth, async (req, res) => {
 
   try {
     const createdRoles = [];
-    for (const roleDef of template.roles) {
+    for (const roleDef of structure.roles) {
       const existing = guild.roles.cache.find((r) => r.name === roleDef.name);
       if (existing) {
         createdRoles.push(existing);
@@ -201,18 +300,18 @@ app.post('/api/apply-template', requireAuth, async (req, res) => {
           name: roleDef.name,
           color: roleDef.color,
           permissions: roleDef.permissions,
-          reason: `Applied template: ${template.name}`
+          reason: `Applied structure: ${structure.name}`
         });
         createdRoles.push(role);
       }
     }
 
     let createdChannels = 0;
-    for (const catDef of template.categories) {
+    for (const catDef of structure.categories) {
       const category = await guild.channels.create({
         name: catDef.name,
-        type: 4, // GuildCategory
-        reason: `Applied template: ${template.name}`
+        type: ChannelType.GuildCategory,
+        reason: `Applied structure: ${structure.name}`
       });
 
       for (const chDef of catDef.channels) {
@@ -220,7 +319,7 @@ app.post('/api/apply-template', requireAuth, async (req, res) => {
           name: chDef.name,
           type: chDef.type,
           parent: category.id,
-          reason: `Applied template: ${template.name}`
+          reason: `Applied structure: ${structure.name}`
         });
         createdChannels += 1;
       }
@@ -228,12 +327,12 @@ app.post('/api/apply-template', requireAuth, async (req, res) => {
 
     res.json({
       success: true,
-      message: `Applied "${template.name}" to ${guild.name}: ${createdRoles.length} roles ready and ${createdChannels} channels created.`
+      message: `Applied ${structure.name} to ${guild.name}: ${createdRoles.length} roles ready and ${createdChannels} channels created.`
     });
   } catch (error) {
     console.error('Template apply error:', error);
     res.status(500).json({
-      error: 'Failed to apply template. Make sure the bot role has Administrator permission and sits above roles it manages.'
+      error: 'Failed to apply structure. Make sure the bot role has Administrator permission and sits above roles it manages.'
     });
   }
 });
