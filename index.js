@@ -1,6 +1,7 @@
 const path = require('path');
 const express = require('express');
 const session = require('express-session');
+const { GoogleGenAI } = require('@google/genai');
 const { Client, GatewayIntentBits, PermissionsBitField, ChannelType } = require('discord.js');
 const templates = require('./templates');
 
@@ -12,13 +13,16 @@ const {
   CLIENT_ID,
   CLIENT_SECRET,
   SESSION_SECRET,
-  REDIRECT_URI
+  REDIRECT_URI,
+  GEMINI_API_KEY
 } = process.env;
 
 if (!DISCORD_TOKEN || !CLIENT_ID || !CLIENT_SECRET || !REDIRECT_URI) {
   console.error('Missing one or more required environment variables: DISCORD_TOKEN, CLIENT_ID, CLIENT_SECRET, REDIRECT_URI');
   process.exit(1);
 }
+
+const ai = GEMINI_API_KEY ? new GoogleGenAI({ apiKey: GEMINI_API_KEY }) : null;
 
 const client = new Client({
   intents: [
@@ -51,7 +55,7 @@ app.use(
 );
 
 function sanitizeChannelName(name) {
-  return name
+  return String(name || '')
     .toLowerCase()
     .replace(/[^a-z0-9\s-]/g, '')
     .trim()
@@ -60,7 +64,7 @@ function sanitizeChannelName(name) {
     .slice(0, 90);
 }
 
-function buildStructureFromPrompt(promptText) {
+function buildStructureFromPromptFallback(promptText) {
   const cleanPrompt = String(promptText || '').trim();
   const lower = cleanPrompt.toLowerCase();
 
@@ -97,7 +101,6 @@ function buildStructureFromPrompt(promptText) {
     }
   }
 
-  // Extract quoted words or "channels for X / with X" hints
   const quotedMatches = [...cleanPrompt.matchAll(/"([^"]{2,30})"/g)];
   for (const m of quotedMatches) {
     const slug = sanitizeChannelName(m[1]);
@@ -129,17 +132,90 @@ function buildStructureFromPrompt(promptText) {
     );
   }
 
-  const categories = [
-    { name: 'Information', channels: infoChannels },
-    { name: 'Community', channels: [...mainChannels, ...extraChannels.slice(0, 6)] },
-    { name: 'Voice Channels', channels: voiceChannels.slice(0, 4) }
-  ];
-
   return {
     name: `Custom Prompt: "${cleanPrompt.slice(0, 50)}${cleanPrompt.length > 50 ? '...' : ''}"`,
     roles,
-    categories
+    categories: [
+      { name: 'Information', channels: infoChannels },
+      { name: 'Community', channels: [...mainChannels, ...extraChannels.slice(0, 6)] },
+      { name: 'Voice Channels', channels: voiceChannels.slice(0, 4) }
+    ]
   };
+}
+
+async function buildStructureWithGemini(promptText) {
+  if (!ai) {
+    return buildStructureFromPromptFallback(promptText);
+  }
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: `Create a clean Discord server structure in English for this user request: "${promptText}".
+Return ONLY valid JSON matching this schema:
+{
+  "roles": [
+    { "name": "string", "color": "#hex", "admin": false, "mod": false }
+  ],
+  "categories": [
+    {
+      "name": "string",
+      "channels": [
+        { "name": "string", "type": "text" }
+      ]
+    }
+  ]
+}
+Rules:
+- Keep role count between 2 and 6.
+- Keep category count between 2 and 5, with 2 to 6 channels per category.
+- Channel type must be "text" or "voice".
+- Text channel names should be lowercase words separated by hyphens (e.g. "general-chat").
+- Voice channel names can be clean words (e.g. "General Voice").`,
+      config: {
+        responseMimeType: 'application/json'
+      }
+    });
+
+    const parsed = JSON.parse(response.text);
+    const roles = Array.isArray(parsed.roles) && parsed.roles.length > 0
+      ? parsed.roles.slice(0, 6).map((r) => ({
+          name: String(r.name || 'Member').slice(0, 40),
+          color: /^#[0-9a-fA-F]{6}$/.test(r.color || '') ? r.color : '#3498db',
+          permissions: r.admin
+            ? [PermissionsBitField.Flags.Administrator]
+            : r.mod
+              ? [PermissionsBitField.Flags.ManageMessages, PermissionsBitField.Flags.KickMembers]
+              : []
+        }))
+      : buildStructureFromPromptFallback(promptText).roles;
+
+    const categories = Array.isArray(parsed.categories) && parsed.categories.length > 0
+      ? parsed.categories.slice(0, 5).map((cat) => ({
+          name: String(cat.name || 'Channels').slice(0, 60),
+          channels: (Array.isArray(cat.channels) ? cat.channels : [])
+            .slice(0, 8)
+            .map((ch) => {
+              const isVoice = String(ch.type || '').toLowerCase() === 'voice';
+              return {
+                name: isVoice
+                  ? String(ch.name || 'Voice Room').slice(0, 60)
+                  : sanitizeChannelName(ch.name || 'channel') || 'channel',
+                type: isVoice ? ChannelType.GuildVoice : ChannelType.GuildText
+              };
+            })
+        }))
+      : buildStructureFromPromptFallback(promptText).categories;
+
+    return {
+      name: `Gemini AI: "${promptText.slice(0, 45)}${promptText.length > 45 ? '...' : ''}"`,
+      roles,
+      categories
+    };
+  } catch (err) {
+    console.error('Gemini generation failed, falling back to local parser:', err.message || err);
+    return buildStructureFromPromptFallback(promptText);
+  }
 }
 
 function requireAuth(req, res, next) {
@@ -275,7 +351,7 @@ app.post('/api/apply-template', requireAuth, async (req, res) => {
 
   let structure = null;
   if (trimmedPrompt.length > 0) {
-    structure = buildStructureFromPrompt(trimmedPrompt);
+    structure = await buildStructureWithGemini(trimmedPrompt);
   } else if (templateId && templates[templateId]) {
     structure = templates[templateId];
   }
@@ -286,7 +362,7 @@ app.post('/api/apply-template', requireAuth, async (req, res) => {
 
   const guild = client.guilds.cache.get(guildId);
   if (!guild) {
-    return res.status(404).json({ error: 'Bot is not in this server yet. Invite the bot first.' });
+    return res.status(404).json({ error: 'Bot is not in this server yet. Click "Invite Bot to Server" first.' });
   }
 
   try {
