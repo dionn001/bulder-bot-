@@ -273,7 +273,13 @@ app.get('/auth/discord/callback', async (req, res) => {
     req.session.user = userData;
     req.session.accessToken = tokenData.access_token;
 
-    res.redirect('/');
+    req.session.save((saveErr) => {
+      if (saveErr) {
+        console.error('Session save error:', saveErr);
+        return res.status(500).send('Failed to save session.');
+      }
+      res.redirect('/');
+    });
   } catch (error) {
     console.error('OAuth callback error:', error);
     res.status(500).send('Authentication error.');
@@ -337,7 +343,7 @@ app.get('/api/guilds', requireAuth, async (req, res) => {
 
     res.json({
       guilds: manageableGuilds,
-      botInviteUrl: `https://discord.com/api/oauth2/authorize?client_id=${CLIENT_ID}&permissions=8&scope=bot%20applications.commands`
+      botInviteUrl: `https://discord.com/api/oauth2/authorize?client_id=${CLIENT_ID}&permissions=8&integration_type=0&scope=bot`
     });
   } catch (error) {
     console.error('Error loading guilds:', error);
