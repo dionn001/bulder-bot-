@@ -14,7 +14,8 @@ const {
   CLIENT_SECRET,
   SESSION_SECRET,
   REDIRECT_URI,
-  GEMINI_API_KEY
+  GEMINI_API_KEY,
+  ADMIN_PASSWORD
 } = process.env;
 
 if (!DISCORD_TOKEN || !CLIENT_ID || !CLIENT_SECRET || !REDIRECT_URI) {
@@ -23,6 +24,19 @@ if (!DISCORD_TOKEN || !CLIENT_ID || !CLIENT_SECRET || !REDIRECT_URI) {
 }
 
 const ai = GEMINI_API_KEY ? new GoogleGenAI({ apiKey: GEMINI_API_KEY }) : null;
+const EXPECTED_ADMIN_PASS = ADMIN_PASSWORD || '6767';
+
+// Live admin settings in memory (reset on restart unless persisted)
+const adminSettings = {
+  maintenanceMode: false,
+  maintenanceMessage: 'The AI Discord Server Builder is currently under maintenance. Please check back shortly!',
+  useGemini: true,
+  allowFallback: true,
+  defaultPermissions: '8',
+  maxCategoriesPerBuild: 5,
+  maxChannelsPerCategory: 6,
+  buildsCompleted: 0
+};
 
 const client = new Client({
   intents: [
@@ -132,19 +146,30 @@ function buildStructureFromPromptFallback(promptText) {
     );
   }
 
+  const maxCats = Math.max(1, Math.min(5, Number(adminSettings.maxCategoriesPerBuild) || 3));
+  const maxCh = Math.max(1, Math.min(8, Number(adminSettings.maxChannelsPerCategory) || 6));
+
+  const allCategories = [
+    { name: 'Information', channels: infoChannels.slice(0, maxCh) },
+    { name: 'Community', channels: [...mainChannels, ...extraChannels].slice(0, maxCh) },
+    { name: 'Voice Channels', channels: voiceChannels.slice(0, maxCh) }
+  ];
+
   return {
     name: `Custom Prompt: "${cleanPrompt.slice(0, 50)}${cleanPrompt.length > 50 ? '...' : ''}"`,
     roles,
-    categories: [
-      { name: 'Information', channels: infoChannels },
-      { name: 'Community', channels: [...mainChannels, ...extraChannels.slice(0, 6)] },
-      { name: 'Voice Channels', channels: voiceChannels.slice(0, 4) }
-    ]
+    categories: allCategories.slice(0, maxCats)
   };
 }
 
 async function buildStructureWithGemini(promptText) {
-  if (!ai) {
+  const maxCats = Math.max(1, Math.min(5, Number(adminSettings.maxCategoriesPerBuild) || 5));
+  const maxCh = Math.max(1, Math.min(8, Number(adminSettings.maxChannelsPerCategory) || 6));
+
+  if (!adminSettings.useGemini || !ai) {
+    if (!adminSettings.allowFallback) {
+      throw new Error('Gemini AI is disabled and fallback parser is disabled in Admin Settings.');
+    }
     return buildStructureFromPromptFallback(promptText);
   }
 
@@ -168,7 +193,7 @@ Return ONLY valid JSON matching this schema:
 }
 Rules:
 - Keep role count between 2 and 6.
-- Keep category count between 2 and 5, with 2 to 6 channels per category.
+- Keep category count between 2 and ${maxCats}, with 2 to ${maxCh} channels per category.
 - Channel type must be "text" or "voice".
 - Text channel names should be lowercase words separated by hyphens (e.g. "general-chat").
 - Voice channel names can be clean words (e.g. "General Voice").`,
@@ -191,10 +216,10 @@ Rules:
       : buildStructureFromPromptFallback(promptText).roles;
 
     const categories = Array.isArray(parsed.categories) && parsed.categories.length > 0
-      ? parsed.categories.slice(0, 5).map((cat) => ({
+      ? parsed.categories.slice(0, maxCats).map((cat) => ({
           name: String(cat.name || 'Channels').slice(0, 60),
           channels: (Array.isArray(cat.channels) ? cat.channels : [])
-            .slice(0, 8)
+            .slice(0, maxCh)
             .map((ch) => {
               const isVoice = String(ch.type || '').toLowerCase() === 'voice';
               return {
@@ -213,7 +238,10 @@ Rules:
       categories
     };
   } catch (err) {
-    console.error('Gemini generation failed, falling back to local parser:', err.message || err);
+    console.error('Gemini generation failed:', err.message || err);
+    if (!adminSettings.allowFallback) {
+      throw err;
+    }
     return buildStructureFromPromptFallback(promptText);
   }
 }
@@ -224,6 +252,110 @@ function requireAuth(req, res, next) {
   }
   next();
 }
+
+function requireAdmin(req, res, next) {
+  if (!req.session || !req.session.isAdmin) {
+    return res.status(403).json({ error: 'Admin access required.' });
+  }
+  next();
+}
+
+function getInviteUrl() {
+  const perms = /^\d+$/.test(String(adminSettings.defaultPermissions || ''))
+    ? String(adminSettings.defaultPermissions)
+    : '8';
+  return `https://discord.com/oauth2/authorize?client_id=${CLIENT_ID}&permissions=${perms}&integration_type=0&scope=bot`;
+}
+
+// Public status endpoint (also used for maintenance banner/gate)
+app.get('/api/status', (req, res) => {
+  res.json({
+    maintenanceMode: adminSettings.maintenanceMode,
+    maintenanceMessage: adminSettings.maintenanceMessage,
+    isAdmin: Boolean(req.session && req.session.isAdmin),
+    botReady: client.isReady(),
+    botTag: client.user ? client.user.tag : null,
+    botInviteUrl: getInviteUrl()
+  });
+});
+
+// Admin auth endpoints
+app.post('/api/admin/login', (req, res) => {
+  const { password } = req.body || {};
+  if (String(password || '') !== EXPECTED_ADMIN_PASS) {
+    return res.status(401).json({ error: 'Invalid admin password.' });
+  }
+  req.session.isAdmin = true;
+  req.session.save((err) => {
+    if (err) {
+      return res.status(500).json({ error: 'Failed to save admin session.' });
+    }
+    res.json({
+      ok: true,
+      isAdmin: true,
+      settings: adminSettings,
+      botInviteUrl: getInviteUrl()
+    });
+  });
+});
+
+app.post('/api/admin/logout', (req, res) => {
+  if (req.session) {
+    req.session.isAdmin = false;
+  }
+  res.json({ ok: true, isAdmin: false });
+});
+
+app.get('/api/admin/settings', requireAdmin, (req, res) => {
+  res.json({
+    settings: adminSettings,
+    botReady: client.isReady(),
+    botTag: client.user ? client.user.tag : null,
+    connectedGuildCount: client.guilds.cache.size,
+    geminiConfigured: Boolean(ai),
+    botInviteUrl: getInviteUrl()
+  });
+});
+
+app.post('/api/admin/settings', requireAdmin, (req, res) => {
+  const {
+    maintenanceMode,
+    maintenanceMessage,
+    useGemini,
+    allowFallback,
+    defaultPermissions,
+    maxCategoriesPerBuild,
+    maxChannelsPerCategory
+  } = req.body || {};
+
+  if (typeof maintenanceMode === 'boolean') {
+    adminSettings.maintenanceMode = maintenanceMode;
+  }
+  if (typeof maintenanceMessage === 'string' && maintenanceMessage.trim().length > 0) {
+    adminSettings.maintenanceMessage = maintenanceMessage.trim().slice(0, 240);
+  }
+  if (typeof useGemini === 'boolean') {
+    adminSettings.useGemini = useGemini;
+  }
+  if (typeof allowFallback === 'boolean') {
+    adminSettings.allowFallback = allowFallback;
+  }
+  if (typeof defaultPermissions === 'string' && /^\d+$/.test(defaultPermissions.trim())) {
+    adminSettings.defaultPermissions = defaultPermissions.trim();
+  }
+  if (Number.isFinite(Number(maxCategoriesPerBuild))) {
+    adminSettings.maxCategoriesPerBuild = Math.max(1, Math.min(5, Number(maxCategoriesPerBuild)));
+  }
+  if (Number.isFinite(Number(maxChannelsPerCategory))) {
+    adminSettings.maxChannelsPerCategory = Math.max(1, Math.min(8, Number(maxChannelsPerCategory)));
+  }
+
+  res.json({
+    ok: true,
+    settings: adminSettings,
+    botInviteUrl: getInviteUrl()
+  });
+});
 
 app.get('/auth/discord', (req, res) => {
   const params = new URLSearchParams({
@@ -287,17 +419,26 @@ app.get('/auth/discord/callback', async (req, res) => {
 });
 
 app.post('/auth/logout', (req, res) => {
+  const keepAdmin = Boolean(req.session && req.session.isAdmin);
   req.session.destroy(() => {
-    res.json({ ok: true });
+    res.json({ ok: true, keepAdmin });
   });
 });
 
 app.get('/api/session', (req, res) => {
   if (!req.session || !req.session.user) {
-    return res.json({ loggedIn: false });
+    return res.json({
+      loggedIn: false,
+      isAdmin: Boolean(req.session && req.session.isAdmin),
+      maintenanceMode: adminSettings.maintenanceMode,
+      maintenanceMessage: adminSettings.maintenanceMessage
+    });
   }
   res.json({
     loggedIn: true,
+    isAdmin: Boolean(req.session.isAdmin),
+    maintenanceMode: adminSettings.maintenanceMode,
+    maintenanceMessage: adminSettings.maintenanceMessage,
     user: {
       id: req.session.user.id,
       username: req.session.user.username,
@@ -343,7 +484,7 @@ app.get('/api/guilds', requireAuth, async (req, res) => {
 
     res.json({
       guilds: manageableGuilds,
-      botInviteUrl: `https://discord.com/api/oauth2/authorize?client_id=${CLIENT_ID}&permissions=8&integration_type=0&scope=bot`
+      botInviteUrl: getInviteUrl()
     });
   } catch (error) {
     console.error('Error loading guilds:', error);
@@ -352,6 +493,11 @@ app.get('/api/guilds', requireAuth, async (req, res) => {
 });
 
 app.post('/api/apply-template', requireAuth, async (req, res) => {
+  const isAdmin = Boolean(req.session && req.session.isAdmin);
+  if (adminSettings.maintenanceMode && !isAdmin) {
+    return res.status(503).json({ error: adminSettings.maintenanceMessage });
+  }
+
   const { guildId, templateId, prompt } = req.body;
   const trimmedPrompt = typeof prompt === 'string' ? prompt.trim() : '';
 
@@ -406,6 +552,8 @@ app.post('/api/apply-template', requireAuth, async (req, res) => {
         createdChannels += 1;
       }
     }
+
+    adminSettings.buildsCompleted += 1;
 
     res.json({
       success: true,
