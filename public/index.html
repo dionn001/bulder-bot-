@@ -1,1 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Server Builder Dashboard</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #0f172a;
+      color: #f8fafc;
+      margin: 0;
+      padding: 2rem;
+    }
+    .container {
+      max-width: 780px;
+      margin: 0 auto;
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 2rem;
+    }
+    h1 { margin-top: 0; font-size: 1.6rem; }
+    p.sub { color: #94a3b8; }
+    button, a.btn {
+      display: inline-block;
+      background: #5865f2;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 0.65rem 1.2rem;
+      font-size: 0.95rem;
+      text-decoration: none;
+      cursor: pointer;
+    }
+    button:hover, a.btn:hover { background: #4752c4; }
+    button.secondary { background: #334155; }
+    .row { margin: 1.2rem 0; }
+    label { display: block; margin-bottom: 0.4rem; color: #cbd5e1; font-weight: 600; }
+    select {
+      width: 100%;
+      padding: 0.6rem;
+      border-radius: 8px;
+      border: 1px solid #475569;
+      background: #0f172a;
+      color: #f8fafc;
+      font-size: 0.95rem;
+    }
+    .status {
+      margin-top: 1rem;
+      padding: 0.85rem 1rem;
+      border-radius: 8px;
+      background: #0f172a;
+      border: 1px solid #334155;
+      white-space: pre-wrap;
+    }
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div id="loggedOutView">
+      <h1>Discord Server Builder</h1>
+      <p class="sub">Sign in with Discord to set up clean channels, roles, and categories from ready-made templates.</p>
+      <a class="btn" href="/auth/discord">Login with Discord</a>
+    </div>
 
+    <div id="loggedInView" style="display: none;">
+      <div class="topbar">
+        <div>
+          <h1 style="margin-bottom: 0.25rem;">Server Builder Dashboard</h1>
+          <div id="userInfo" class="sub"></div>
+        </div>
+        <button class="secondary" id="logoutBtn">Logout</button>
+      </div>
+
+      <div class="row">
+        <label for="guildSelect">Select Server</label>
+        <select id="guildSelect"></select>
+        <div style="margin-top: 0.6rem;">
+          <a class="btn" id="inviteBotLink" href="#" target="_blank" rel="noopener">Invite Bot to Server</a>
+        </div>
+      </div>
+
+      <div class="row">
+        <label for="templateSelect">Select Template</label>
+        <select id="templateSelect"></select>
+      </div>
+
+      <div class="row">
+        <button id="applyBtn">Build Server Structure</button>
+      </div>
+
+      <div id="statusBox" class="status" style="display: none;"></div>
+    </div>
+  </div>
+
+  <script>
+    const loggedOutView = document.getElementById('loggedOutView');
+    const loggedInView = document.getElementById('loggedInView');
+    const userInfo = document.getElementById('userInfo');
+    const guildSelect = document.getElementById('guildSelect');
+    const templateSelect = document.getElementById('templateSelect');
+    const inviteBotLink = document.getElementById('inviteBotLink');
+    const statusBox = document.getElementById('statusBox');
+
+    function showStatus(text) {
+      statusBox.style.display = 'block';
+      statusBox.textContent = text;
+    }
+
+    async function init() {
+      const sessionRes = await fetch('/api/session');
+      const sessionData = await sessionRes.json();
+
+      if (!sessionData.loggedIn) {
+        loggedOutView.style.display = 'block';
+        loggedInView.style.display = 'none';
+        return;
+      }
+
+      loggedOutView.style.display = 'none';
+      loggedInView.style.display = 'block';
+      const displayName = sessionData.user.globalName || sessionData.user.username;
+      userInfo.textContent = `Signed in as ${displayName}`;
+
+      const [guildsRes, templatesRes] = await Promise.all([
+        fetch('/api/guilds'),
+        fetch('/api/templates')
+      ]);
+
+      const guildsData = await guildsRes.json();
+      const templatesData = await templatesRes.json();
+
+      if (guildsData.botInviteUrl) {
+        inviteBotLink.href = guildsData.botInviteUrl;
+      }
+
+      guildSelect.innerHTML = '';
+      for (const g of guildsData.guilds || []) {
+        const opt = document.createElement('option');
+        opt.value = g.id;
+        opt.textContent = `${g.name}${g.botInServer ? ' (Bot connected)' : ' (Invite bot first)'}`;
+        guildSelect.appendChild(opt);
+      }
+
+      templateSelect.innerHTML = '';
+      for (const t of templatesData.templates || []) {
+        const opt = document.createElement('option');
+        opt.value = t.id;
+        opt.textContent = `${t.name} — ${t.description}`;
+        templateSelect.appendChild(opt);
+      }
+    }
+
+    document.getElementById('applyBtn').addEventListener('click', async () => {
+      showStatus('Building server structure...');
+      const res = await fetch('/api/apply-template', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          guildId: guildSelect.value,
+          templateId: templateSelect.value
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showStatus(`Error: ${data.error || 'Could not apply template.'}`);
+        return;
+      }
+      showStatus(data.message);
+      await init();
+    });
+
+    document.getElementById('logoutBtn').addEventListener('click', async () => {
+      await fetch('/auth/logout', { method: 'POST' });
+      window.location.reload();
+    });
+
+    init();
+  </script>
+</body>
+</html>
