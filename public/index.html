@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Free Server Builder Dashboard</title>
+  <title>AI Discord Server Builder</title>
   <style>
     body {
       font-family: system-ui, -apple-system, sans-serif;
@@ -34,7 +34,16 @@
       cursor: pointer;
     }
     button:hover, a.btn:hover { background: #4752c4; }
-    button.secondary { background: #334155; }
+    button.secondary, a.btn.secondary { background: #334155; }
+    button.secondary:hover, a.btn.secondary:hover { background: #475569; }
+    a.btn.invite { background: #16a34a; }
+    a.btn.invite:hover { background: #15803d; }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.6rem;
+      margin-top: 0.65rem;
+    }
     .row { margin: 1.2rem 0; }
     label { display: block; margin-bottom: 0.4rem; color: #cbd5e1; font-weight: 600; }
     select, textarea {
@@ -70,15 +79,15 @@
 <body>
   <div class="container">
     <div id="loggedOutView">
-      <h1>Free Discord Server Builder</h1>
-      <p class="sub">Sign in with Discord, describe the server you want in your own words (or pick a preset), and build channels and roles automatically for free.</p>
+      <h1>AI Discord Server Builder</h1>
+      <p class="sub">Sign in with Discord, invite the bot, and describe the server structure you want in your own words.</p>
       <a class="btn" href="/auth/discord">Login with Discord</a>
     </div>
 
     <div id="loggedInView" style="display: none;">
       <div class="topbar">
         <div>
-          <h1 style="margin-bottom: 0.25rem;">Free Server Builder Dashboard</h1>
+          <h1 style="margin-bottom: 0.25rem;">AI Discord Server Builder</h1>
           <div id="userInfo" class="sub"></div>
         </div>
         <button class="secondary" id="logoutBtn">Logout</button>
@@ -87,15 +96,16 @@
       <div class="row">
         <label for="guildSelect">Select Server</label>
         <select id="guildSelect"></select>
-        <div style="margin-top: 0.6rem;">
-          <a class="btn" id="inviteBotLink" href="#" target="_blank" rel="noopener">Invite Bot to Server</a>
+        <div class="actions">
+          <a class="btn invite" id="inviteBotLink" href="#" target="_blank" rel="noopener">Invite Bot to Server</a>
+          <button class="secondary" type="button" id="refreshBtn">Refresh Servers</button>
         </div>
       </div>
 
       <div class="row">
-        <label for="promptInput">Describe Your Server (Free Custom Prompt)</label>
-        <textarea id="promptInput" placeholder="Example: Create a gaming and hangout server with memes, clips, rules, announcements, and squad voice channels..."></textarea>
-        <div class="hint">Tip: If you write something here, it generates a custom structure from your text. Leave it blank to use the preset template below.</div>
+        <label for="promptInput">Describe Your Server (Powered by Gemini)</label>
+        <textarea id="promptInput" placeholder="Example: Create a gaming and chill server with memes, clips, rules, announcements, and squad voice channels..."></textarea>
+        <div class="hint">Type anything you want here to generate a custom server structure. Leave empty to use a preset template below.</div>
       </div>
 
       <div class="row">
@@ -170,8 +180,14 @@
       }
     }
 
+    document.getElementById('refreshBtn').addEventListener('click', async () => {
+      showStatus('Refreshing server list...');
+      await init();
+      showStatus('Server list updated.');
+    });
+
     document.getElementById('applyBtn').addEventListener('click', async () => {
-      showStatus('Building server structure...');
+      showStatus('Generating structure and building server...');
       const res = await fetch('/api/apply-template', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
