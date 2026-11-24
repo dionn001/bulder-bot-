@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Server Builder Dashboard</title>
+  <title>Free Server Builder Dashboard</title>
   <style>
     body {
       font-family: system-ui, -apple-system, sans-serif;
@@ -37,15 +37,19 @@
     button.secondary { background: #334155; }
     .row { margin: 1.2rem 0; }
     label { display: block; margin-bottom: 0.4rem; color: #cbd5e1; font-weight: 600; }
-    select {
+    select, textarea {
       width: 100%;
-      padding: 0.6rem;
+      box-sizing: border-box;
+      padding: 0.65rem;
       border-radius: 8px;
       border: 1px solid #475569;
       background: #0f172a;
       color: #f8fafc;
       font-size: 0.95rem;
+      font-family: inherit;
     }
+    textarea { min-height: 95px; resize: vertical; }
+    .hint { font-size: 0.85rem; color: #94a3b8; margin-top: 0.35rem; }
     .status {
       margin-top: 1rem;
       padding: 0.85rem 1rem;
@@ -66,15 +70,15 @@
 <body>
   <div class="container">
     <div id="loggedOutView">
-      <h1>Discord Server Builder</h1>
-      <p class="sub">Sign in with Discord to set up clean channels, roles, and categories from ready-made templates.</p>
+      <h1>Free Discord Server Builder</h1>
+      <p class="sub">Sign in with Discord, describe the server you want in your own words (or pick a preset), and build channels and roles automatically for free.</p>
       <a class="btn" href="/auth/discord">Login with Discord</a>
     </div>
 
     <div id="loggedInView" style="display: none;">
       <div class="topbar">
         <div>
-          <h1 style="margin-bottom: 0.25rem;">Server Builder Dashboard</h1>
+          <h1 style="margin-bottom: 0.25rem;">Free Server Builder Dashboard</h1>
           <div id="userInfo" class="sub"></div>
         </div>
         <button class="secondary" id="logoutBtn">Logout</button>
@@ -89,7 +93,13 @@
       </div>
 
       <div class="row">
-        <label for="templateSelect">Select Template</label>
+        <label for="promptInput">Describe Your Server (Free Custom Prompt)</label>
+        <textarea id="promptInput" placeholder="Example: Create a gaming and hangout server with memes, clips, rules, announcements, and squad voice channels..."></textarea>
+        <div class="hint">Tip: If you write something here, it generates a custom structure from your text. Leave it blank to use the preset template below.</div>
+      </div>
+
+      <div class="row">
+        <label for="templateSelect">Or Choose a Preset Template</label>
         <select id="templateSelect"></select>
       </div>
 
@@ -106,6 +116,7 @@
     const loggedInView = document.getElementById('loggedInView');
     const userInfo = document.getElementById('userInfo');
     const guildSelect = document.getElementById('guildSelect');
+    const promptInput = document.getElementById('promptInput');
     const templateSelect = document.getElementById('templateSelect');
     const inviteBotLink = document.getElementById('inviteBotLink');
     const statusBox = document.getElementById('statusBox');
@@ -166,12 +177,13 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           guildId: guildSelect.value,
-          templateId: templateSelect.value
+          templateId: templateSelect.value,
+          prompt: promptInput.value
         })
       });
       const data = await res.json();
       if (!res.ok) {
-        showStatus(`Error: ${data.error || 'Could not apply template.'}`);
+        showStatus(`Error: ${data.error || 'Could not apply structure.'}`);
         return;
       }
       showStatus(data.message);
