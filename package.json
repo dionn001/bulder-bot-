@@ -1,1 +1,14 @@
-
+{
+  "name": "discord-server-builder",
+  "version": "1.0.0",
+  "description": "Discord bot that builds servers with a connected website",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.16.3",
+    "express": "^4.21.1",
+    "express-session": "^1.18.1"
+  }
+}
